@@ -11,81 +11,108 @@
 #define CCOMPASS_IMPLEMENTATION
 #include "ccompass.h"
 
-// #define M_PI_2 1.57079632679
-
 
 const std::string NAME = "pview";
 const std::string TOPIC = "/arena_camera_node/image_raw";
+
+namespace pview {
+
 const std::string RAW_WINDOW_NAME = "raw";
 const std::string AZI_WINDOW_NAME = "azimuth";
 const double RAW_SCL = 0.25;
 const double AZI_SCL = 0.50;
 
+class Node {
+public:
+    Node(): 
+        transport(handle) 
+    {
+        ROS_INFO("pview init");
 
-void imageCallback(const sensor_msgs::ImageConstPtr& msg) {
+        // Allows communication with the ROS ecosystem.
+        // Also defines the lifecycle of the node.
+        // ros::NodeHandle handle;
 
-    cv::Mat raw_image;
-    raw_image = cv_bridge::toCvShare(msg, "mono8")->image;
+        // Creates a CV2 window with name.
+        cv::namedWindow(RAW_WINDOW_NAME, cv::WindowFlags::WINDOW_NORMAL);
+        cv::namedWindow(AZI_WINDOW_NAME, cv::WindowFlags::WINDOW_NORMAL);
+    }
+    
+    ~Node() {
+        ROS_INFO("pview clean up");
 
-    cv::Size s = raw_image.size();
-    int w = s.width/2, h = s.height/2;
+        // Clean up.
+        cv::destroyAllWindows();
+    }
 
-    // TODO Like, don't allocate this on the fly..
-    struct cc_stokes *stokes_vectors;
-    stokes_vectors = (struct cc_stokes*) malloc(sizeof(struct cc_stokes) * w * h);
+    void subscribeTopic(const std::string topic) {
+        ROS_INFO("pview subscribed %s", topic.c_str());
+        // TODO: Check that the topic refers to an image topic.
+        // TODO: If subscribeTopic is called more than once, what happens?
 
-    cc_compute_stokes(raw_image.data, stokes_vectors, w, h);
-    cc_transform_stokes(stokes_vectors, w, h);
+        // Subscribe to the image topic. 
+        // The callback belongs to the node class as a member function.
+        // We pass a reference to the function and a reference to the instance of Node which
+        // should handle a function call.
+        subscriber = transport.subscribe(topic, 1, &Node::handleImage, this);
+    }
 
-    double *aolps;
-    aolps = (double*) malloc(sizeof(double) * w * h);
-    cc_compute_aolp(stokes_vectors, aolps, w, h);
+    void handleImage(const sensor_msgs::ImageConstPtr& msg) {
+        cv::Mat raw_image;
+        raw_image = cv_bridge::toCvShare(msg, "mono8")->image;
 
-    unsigned char *pix;
-    pix = (unsigned char*) malloc(sizeof(unsigned char) * w * h * 4);
-    cc_compute_cmap(aolps, w * h, -M_PI_2, M_PI_2, (struct cc_color*) pix);
+        cv::Size s = raw_image.size();
+        int w = s.width/2, h = s.height/2;
 
-    cv::Mat raw_image_scaled;
-    cv::resize(raw_image, raw_image_scaled, cv::Size(), RAW_SCL, RAW_SCL, cv::InterpolationFlags::INTER_AREA);
-    cv::imshow(RAW_WINDOW_NAME, raw_image_scaled);
+        struct cc_stokes *stokes_vectors;
+        stokes_vectors = (struct cc_stokes*) malloc(sizeof(struct cc_stokes) * w * h);
 
-    cv::Mat azimuth_image(h, w, CV_8UC4, pix);
-    cv::Mat azimuth_image_scaled;
-    cv::resize(azimuth_image, azimuth_image_scaled, cv::Size(), AZI_SCL, AZI_SCL, cv::InterpolationFlags::INTER_AREA);
-    cv::imshow(AZI_WINDOW_NAME, azimuth_image_scaled);
-    cv::waitKey(30);
+        cc_compute_stokes(raw_image.data, stokes_vectors, w, h);
+        cc_transform_stokes(stokes_vectors, w, h);
 
-    free(pix);
-    free(aolps);
-    free(stokes_vectors);
+        double *aolps;
+        aolps = (double*) malloc(sizeof(double) * w * h);
+        cc_compute_aolp(stokes_vectors, aolps, w, h);
+
+        unsigned char *pix;
+        pix = (unsigned char*) malloc(sizeof(unsigned char) * w * h * 4);
+        cc_compute_cmap(aolps, w * h, -M_PI_2, M_PI_2, (struct cc_color*) pix);
+
+        cv::Mat raw_image_scaled;
+        cv::resize(raw_image, raw_image_scaled, cv::Size(), RAW_SCL, RAW_SCL, cv::InterpolationFlags::INTER_AREA);
+        cv::imshow(RAW_WINDOW_NAME, raw_image_scaled);
+
+        cv::Mat azimuth_image(h, w, CV_8UC4, pix);
+        cv::Mat azimuth_image_scaled;
+        cv::resize(azimuth_image, azimuth_image_scaled, cv::Size(), AZI_SCL, AZI_SCL, cv::InterpolationFlags::INTER_AREA);
+        cv::imshow(AZI_WINDOW_NAME, azimuth_image_scaled);
+        cv::waitKey(30);
+
+        free(pix);
+        free(aolps);
+        free(stokes_vectors);
+    }
+
+private:
+    ros::NodeHandle handle;
+    image_transport::ImageTransport transport;
+    image_transport::Subscriber subscriber;
+};
+
 }
-
 
 int main(int argc, char* argv[]) {
 
     // Makes the ROS ecosystem aware of this node.
     ros::init(argc, argv, NAME);
-    ROS_INFO("pview init");
 
-    // Allows communication with the ROS ecosystem.
-    // Also defines the lifecycle of the node.
-    ros::NodeHandle handle;
-
-    // Creates a CV2 window with name.
-    cv::namedWindow(RAW_WINDOW_NAME, cv::WindowFlags::WINDOW_NORMAL);
-    cv::namedWindow(AZI_WINDOW_NAME, cv::WindowFlags::WINDOW_NORMAL);
-
-    image_transport::ImageTransport transport(handle);
-    image_transport::Subscriber subscriber;
-    subscriber = transport.subscribe(TOPIC, 1, imageCallback);
+    // Create an instance of the Node class to hold node state.
+    pview::Node node;
+    node.subscribeTopic(TOPIC);
     
     // Blocks until node is closed via CTRL-C or shutdown is requested by master.
     // Allows callbacks to be invoked.
     ros::spin();
-
-    // Clean up.
-    cv::destroyAllWindows();
-    ROS_INFO("pview cleaned");
 
     return 0;
 }
