@@ -74,6 +74,13 @@ public:
         aolps = (double*) malloc(sizeof(double) * w * h);
         cc_compute_aolp(stokes_vectors, aolps, w, h);
 
+        // double *dolps;
+        // dolps = (double*) malloc(sizeof(double) * w * h);
+        // cc_compute_dolp(stokes_vectors, dolps, w, h);
+
+        // double azimuth;
+        // cc_hough_transform(aolps, dolps, w, h, &azimuth);
+
         unsigned char *pix;
         pix = (unsigned char*) malloc(sizeof(unsigned char) * w * h * 4);
         cc_compute_cmap(aolps, w * h, -M_PI_2, M_PI_2, (struct cc_color*) pix);
@@ -83,6 +90,20 @@ public:
         cv::imshow(RAW_WINDOW_NAME, raw_image_scaled);
 
         cv::Mat azimuth_image(h, w, CV_8UC4, pix);
+
+        // double angle = -azimuth;
+        // // double angle = M_2_PI - azimuth;
+        // ROS_INFO("current heading %f", angle * 180.0 / M_PI);
+        // cv::Point2d unit = { cos(angle), sin(angle) };
+        // double scale = 300;
+        // cv::Point2d transform = { w/2, h/2 };
+
+        // cv::Point2i p0 = {w/2, h/2};
+        // cv::Point2i p1 = unit * scale + transform;
+
+        // Draw line overlay on image.
+        // cv::arrowedLine(azimuth_image, p0, p1, 0.0, 5);
+
         cv::Mat azimuth_image_scaled;
         cv::resize(azimuth_image, azimuth_image_scaled, cv::Size(), AZI_SCL, AZI_SCL, cv::InterpolationFlags::INTER_AREA);
         cv::imshow(AZI_WINDOW_NAME, azimuth_image_scaled);
