@@ -4,16 +4,23 @@
 /// 14 Aug 2024 
 
 #include <ros/ros.h>
+#include <std_msgs/Header.h>
 #include <image_transport/image_transport.h>
 #include <opencv2/highgui/highgui.hpp>
 #include <cv_bridge/cv_bridge.h>
+#include <sensor_msgs/Imu.h>
+#include <geometry_msgs/Quaternion.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 
 #define CCOMPASS_IMPLEMENTATION
 #include "ccompass.h"
 
 
 const std::string NAME = "pview";
-const std::string TOPIC = "/arena_camera_node/image_raw";
+
+// TODO: Use parameter server to set these values.
+const std::string IMG_TOPIC = "/arena_camera_node/image_raw";
+const std::string IMU_TOPIC = "/novatel/imu";
 
 namespace pview {
 
@@ -24,8 +31,9 @@ const double AZI_SCL = 0.50;
 
 class Node {
 public:
-    Node(): 
-        transport(handle) 
+    Node(const std::string imgTopic, const std::string imuTopic): 
+        handle(),
+        imgTransport(handle)
     {
         ROS_INFO("pview init");
 
@@ -36,6 +44,19 @@ public:
         // Creates a CV2 window with name.
         cv::namedWindow(RAW_WINDOW_NAME, cv::WindowFlags::WINDOW_NORMAL);
         cv::namedWindow(AZI_WINDOW_NAME, cv::WindowFlags::WINDOW_NORMAL);
+
+        // TODO: Check that the topic refers to an image topic.
+
+        // Subscribe to the image topic. 
+        // The callback belongs to the node class as a member function.
+        // We pass a reference to the function and a reference to the instance of Node which
+        // should handle a function call.
+        imgSubscriber = imgTransport.subscribe(imgTopic, 1, &Node::handleImage, this);
+        ROS_INFO("pview subscribed %s", imgTopic.c_str());
+
+        // Subscribe to the IMU topic to recieve attitude data.
+        imuSubscriber = handle.subscribe(imuTopic, 1, &Node::handleIMU, this); 
+        ROS_INFO("pview subscribed %s", imuTopic.c_str());
     }
     
     ~Node() {
@@ -45,79 +66,115 @@ public:
         cv::destroyAllWindows();
     }
 
-    void subscribeTopic(const std::string topic) {
-        ROS_INFO("pview subscribed %s", topic.c_str());
-        // TODO: Check that the topic refers to an image topic.
-        // TODO: If subscribeTopic is called more than once, what happens?
+    void spin() {
 
-        // Subscribe to the image topic. 
-        // The callback belongs to the node class as a member function.
-        // We pass a reference to the function and a reference to the instance of Node which
-        // should handle a function call.
-        subscriber = transport.subscribe(topic, 1, &Node::handleImage, this);
+        while(ros::ok()) {
+
+            // 1 frame was drawn in the time between this current frame and the last frame.
+            //double fps = 1 / (e.current_real.toSec() - e.last_real.toSec());
+
+            // We should only draw the images if there is valid image data in the buffer.
+            if(rawImgPtr != nullptr) {
+                cv::Mat rawImgScl;
+                cv::resize(rawImgPtr->image, rawImgScl, cv::Size(), RAW_SCL, RAW_SCL, cv::InterpolationFlags::INTER_AREA);
+                cv::imshow(RAW_WINDOW_NAME, rawImgScl);
+            }
+
+            if(aziImgPtr != nullptr) {
+                cv::Mat aziImgScl;
+                cv::resize(*aziImgPtr, aziImgScl, cv::Size(), AZI_SCL, AZI_SCL, cv::InterpolationFlags::INTER_AREA);
+                cv::imshow(AZI_WINDOW_NAME, aziImgScl);
+            }
+
+            cv::waitKey(30);
+
+            // Process any pending events.
+            ros::spinOnce();
+        }
+
+        // Program will exit. 
     }
 
     void handleImage(const sensor_msgs::ImageConstPtr& msg) {
-        cv::Mat raw_image;
-        raw_image = cv_bridge::toCvShare(msg, "mono8")->image;
+        // Called by ROS when a new image is published.
+        // We collect the image from the buffer, parse it, and save the result
+        // to our local buffer.
 
-        cv::Size s = raw_image.size();
+        // Save shared pointer to image message.
+        // By setting this pointer, we are letting the pointer to the last image message
+        // go out of scope. The shared pointer will handle destroying the underlying
+        // object, hopefully.
+        rawImgPtr = cv_bridge::toCvShare(msg, "mono8");
+
+        cv::Size s = rawImgPtr->image.size();
         int w = s.width/2, h = s.height/2;
 
         struct cc_stokes *stokes_vectors;
         stokes_vectors = (struct cc_stokes*) malloc(sizeof(struct cc_stokes) * w * h);
 
-        cc_compute_stokes(raw_image.data, stokes_vectors, w, h);
+        cc_compute_stokes(rawImgPtr->image.data, stokes_vectors, w, h);
         cc_transform_stokes(stokes_vectors, w, h);
 
         double *aolps;
         aolps = (double*) malloc(sizeof(double) * w * h);
         cc_compute_aolp(stokes_vectors, aolps, w, h);
 
-        // double *dolps;
-        // dolps = (double*) malloc(sizeof(double) * w * h);
-        // cc_compute_dolp(stokes_vectors, dolps, w, h);
-
-        // double azimuth;
-        // cc_hough_transform(aolps, dolps, w, h, &azimuth);
+        // https://docs.opencv.org/3.4/d3/d63/classcv_1_1Mat.html#a51615ebf17a64c968df0bf49b4de6a3a
+        // According to the documentation, passing a pointer to external pixel data requires the caller
+        // to manually free the data after use. This process is normally done when the cv::Mat is 
+        // deconstructed.
+        //
+        // Specifically, regarding the data pointer (pix):
+        // Pointer to the user data. Matrix constructors that take data and step parameters do not 
+        // allocate matrix data. Instead, they just initialize the matrix header that points to the 
+        // specified data, which means that no data is copied. This operation is very efficient and 
+        // can be used to process external data using OpenCV functions. The external data is not automatically 
+        // deallocated, so you should take care of it. 
+        
+        // There might be a better way to do this.
+        if(aziImgPtr != nullptr)
+            // Release pix from the last image.
+            free(aziImgPtr->ptr());
 
         unsigned char *pix;
         pix = (unsigned char*) malloc(sizeof(unsigned char) * w * h * 4);
         cc_compute_cmap(aolps, w * h, -M_PI_2, M_PI_2, (struct cc_color*) pix);
 
-        cv::Mat raw_image_scaled;
-        cv::resize(raw_image, raw_image_scaled, cv::Size(), RAW_SCL, RAW_SCL, cv::InterpolationFlags::INTER_AREA);
-        cv::imshow(RAW_WINDOW_NAME, raw_image_scaled);
+        // Create a unique pointer to this cv::Mat.
+        aziImgPtr = std::make_unique<cv::Mat>(cv::Mat(h, w, CV_8UC4, pix));
 
-        cv::Mat azimuth_image(h, w, CV_8UC4, pix);
-
-        // double angle = -azimuth;
-        // // double angle = M_2_PI - azimuth;
-        // ROS_INFO("current heading %f", angle * 180.0 / M_PI);
-        // cv::Point2d unit = { cos(angle), sin(angle) };
-        // double scale = 300;
-        // cv::Point2d transform = { w/2, h/2 };
-
-        // cv::Point2i p0 = {w/2, h/2};
-        // cv::Point2i p1 = unit * scale + transform;
-
-        // Draw line overlay on image.
-        // cv::arrowedLine(azimuth_image, p0, p1, 0.0, 5);
-
-        cv::Mat azimuth_image_scaled;
-        cv::resize(azimuth_image, azimuth_image_scaled, cv::Size(), AZI_SCL, AZI_SCL, cv::InterpolationFlags::INTER_AREA);
-        cv::imshow(AZI_WINDOW_NAME, azimuth_image_scaled);
-        cv::waitKey(30);
-
-        free(pix);
         free(aolps);
         free(stokes_vectors);
     }
 
+    void handleIMU(const sensor_msgs::Imu::ConstPtr& data) {
+
+        // The input argument is a *pointer* to the structure. Use accordingly.
+
+        tf2::Quaternion q;
+        tf2::convert(data->orientation, q);
+
+        tf2::Matrix3x3 m(q);
+
+        double r,p,y;
+        m.getRPY(r, p, y);
+
+        r *= 180 / M_PI;
+        p *= 180 / M_PI;
+        y *= 180 / M_PI;
+
+        ROS_INFO("orientation (roll, pitch, yaw): %f, %f, %f", r, p, y);
+    }
+
 private:
     ros::NodeHandle handle;
-    image_transport::ImageTransport transport;
-    image_transport::Subscriber subscriber;
+    image_transport::ImageTransport imgTransport;
+    image_transport::Subscriber imgSubscriber;
+    ros::Subscriber imuSubscriber;
+
+    cv_bridge::CvImageConstPtr rawImgPtr;
+    std::unique_ptr<cv::Mat> aziImgPtr; 
+    tf2::Vector3 orientation;
 };
 
 }
@@ -128,12 +185,12 @@ int main(int argc, char* argv[]) {
     ros::init(argc, argv, NAME);
 
     // Create an instance of the Node class to hold node state.
-    pview::Node node;
-    node.subscribeTopic(TOPIC);
+    // We pass the node the topic names it should listen on.
+    pview::Node node(IMG_TOPIC, IMU_TOPIC);
     
     // Blocks until node is closed via CTRL-C or shutdown is requested by master.
     // Allows callbacks to be invoked.
-    ros::spin();
+    node.spin();
 
     return 0;
 }

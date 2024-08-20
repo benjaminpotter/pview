@@ -11,6 +11,7 @@ find_package(catkin REQUIRED COMPONENTS
   roscpp
   std_msgs
   sensor_msgs
+  geometry_msgs
   cv_bridge
   image_transport
 )
@@ -109,7 +110,13 @@ find_package(OpenCV 4 REQUIRED)
 catkin_package(
   INCLUDE_DIRS include
 #  LIBRARIES pview
-  CATKIN_DEPENDS roscpp std_msgs sensor_msgs cv_bridge image_transport
+  CATKIN_DEPENDS 
+    roscpp 
+    std_msgs 
+    sensor_msgs 
+    geometry_msgs 
+    cv_bridge 
+    image_transport
 #  DEPENDS system_lib
 )
 
@@ -122,7 +129,6 @@ catkin_package(
 include_directories(
   include
   ${catkin_INCLUDE_DIRS}
-  ${OpenCV_INCLUDE_DIRS}
 )
 
 ## Declare a C++ library
@@ -156,7 +162,7 @@ include_directories(
 # )
 
 add_executable(pview src/pview.cpp)
-target_link_libraries(pview ${catkin_LIBRARIES} ${OpenCV_INCLUDE_DIRS})
+target_link_libraries(pview ${catkin_LIBRARIES})
 
 #############
 ## Install ##
