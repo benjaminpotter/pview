@@ -146,9 +146,9 @@ public:
         tf2::convert(data->orientation, q);
 
         tf2::Matrix3x3 m(q);
-        m.getRPY(orientation.x, orientation.y, orientation.z);
+        //m.getRPY(orientation.x, orientation.y, orientation.z);
 
-        ROS_INFO("orientation (roll, pitch, yaw): %f, %f, %f", orientation.x, 0, 0);
+        //ROS_INFO("orientation (roll, pitch, yaw): %f, %f, %f", orientation.x, 0, 0);
     }
 
 private:
